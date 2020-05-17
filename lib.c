@@ -1390,7 +1390,6 @@ static void predefined_macros(void)
 
 	switch (arch_m64) {
 	case ARCH_LP32:
-		break;
 	case ARCH_X32:
 		predefine("__ILP32__", 1, "1");
 		predefine("_ILP32", 1, "1");
