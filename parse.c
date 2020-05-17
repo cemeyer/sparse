@@ -2191,9 +2191,16 @@ static struct token *parse_static_assert(struct token *token, struct symbol_list
 
 	token = expect(token, ';', "after _Static_assert()");
 
+	/*
+	 * Sparse produces false positives on our sizeof() ABI asserts and our
+	 * regular compiler enforces Static_asserts, so there is no value in
+	 * having Sparse produce these errors.
+	 */
+#if 0
 	if (cond && !const_expression_value(cond) && cond->type == EXPR_VALUE)
 		sparse_error(cond->pos, "static assertion failed: %s",
 			     show_string(message->string));
+#endif
 	return token;
 }
 
