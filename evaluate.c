@@ -46,6 +46,7 @@
 struct symbol *current_fn;
 
 struct ident bad_address_space = { .len = 6, .name = "bad AS", };
+const unsigned bad_segflg_arg = UINT_MAX;
 
 static struct symbol *degenerate(struct expression *expr);
 static struct symbol *evaluate_symbol(struct symbol *sym);
@@ -218,10 +219,12 @@ static struct symbol *base_type(struct symbol *node, unsigned long *modp, struct
 {
 	unsigned long mod = 0;
 	struct ident *as = NULL;
+	unsigned segflg_arg = 0;
 
 	while (node) {
 		mod |= node->ctype.modifiers;
 		combine_address_space(node->pos, &as, node->ctype.as);
+		combine_segflg_arg(node->pos, &segflg_arg, node->ctype.segflg_arg);
 		if (node->type == SYM_NODE) {
 			node = node->ctype.base_type;
 			continue;
@@ -664,6 +667,7 @@ const char *type_difference(struct ctype *c1, struct ctype *c2,
 	unsigned long mod1, unsigned long mod2)
 {
 	struct ident *as1 = c1->as, *as2 = c2->as;
+	unsigned sa1 = c1->segflg_arg, sa2 = c2->segflg_arg;
 	struct symbol *t1 = c1->base_type;
 	struct symbol *t2 = c2->base_type;
 	int move1 = 1, move2 = 1;
@@ -682,6 +686,7 @@ const char *type_difference(struct ctype *c1, struct ctype *c2,
 			if (t1 && t1->type != SYM_PTR) {
 				mod1 |= t1->ctype.modifiers;
 				combine_address_space(t1->pos, &as1, t1->ctype.as);
+				combine_segflg_arg(t1->pos, &sa1, t1->ctype.segflg_arg);
 			}
 			move1 = 0;
 		}
@@ -690,6 +695,7 @@ const char *type_difference(struct ctype *c1, struct ctype *c2,
 			if (t2 && t2->type != SYM_PTR) {
 				mod2 |= t2->ctype.modifiers;
 				combine_address_space(t2->pos, &as2, t2->ctype.as);
+				combine_segflg_arg(t2->pos, &sa2, t2->ctype.segflg_arg);
 			}
 			move2 = 0;
 		}
@@ -748,8 +754,10 @@ const char *type_difference(struct ctype *c1, struct ctype *c2,
 			base2 = examine_pointer_target(t2);
 			mod1 = t1->ctype.modifiers;
 			as1 = t1->ctype.as;
+			sa1 = t1->ctype.segflg_arg;
 			mod2 = t2->ctype.modifiers;
 			as2 = t2->ctype.as;
+			sa2 = t2->ctype.segflg_arg;
 			break;
 		case SYM_FN: {
 			struct symbol *arg1, *arg2;
@@ -761,8 +769,10 @@ const char *type_difference(struct ctype *c1, struct ctype *c2,
 				return "different modifiers";
 			mod1 = t1->ctype.modifiers;
 			as1 = t1->ctype.as;
+			sa1 = t1->ctype.segflg_arg;
 			mod2 = t2->ctype.modifiers;
 			as2 = t2->ctype.as;
+			sa2 = t2->ctype.segflg_arg;
 
 			if (t1->variadic != t2->variadic)
 				return "incompatible variadic arguments";
@@ -1398,8 +1408,69 @@ static int whitelist_pointers(struct symbol *t1, struct symbol *t2)
 	return !Wtypesign;
 }
 
+/*
+ * Check if parameter 's' can be coerced to type 't'.  I.e.,
+ * ('t'.as == magic as(100) &&
+ *   ('s'.as == 1 && args['t'.sa] == ICE UIO_USERSPACE (0)) ||
+ *   ('s'.as == 0 or unset && args['t'.sa] == ICE UIO_SYSSPACE (1)))
+ */
+static int check_coerce_as(struct symbol *t, struct symbol *s,
+	struct expression_list *arguments, const char **typediff)
+{
+	struct expression *expr;
+	int i, found;
+	unsigned value;
+
+	// entry typediff = "different address spaces"
+	
+	if (arguments == NULL)
+		return 0;
+	if (t->ctype.as != segflg_arg_magic_as)
+		return 0;
+	if (t->ctype.segflg_arg == 0)
+		return 0;
+
+	/* Locate args['t'.sa] */
+	found = 0;
+	i = 1;
+	FOR_EACH_PTR(arguments, expr) {
+		if (i == t->ctype.segflg_arg) {
+			found = 1;
+			break;
+		}
+		i++;
+	} END_FOR_EACH_PTR(expr);
+
+	if (!found)
+		return 0;
+
+	/* Check for ICE in fnarg[t.sa], then value. */
+	value = const_expression_value(expr);
+	if (value != 0 && value != 1) {
+		info(s->pos, "argument %u has bogus uio_segflg: %u",
+		    t->ctype.segflg_arg, value);
+		return 0;
+	}
+
+	if (value == 0) {
+		/* UIO_USERSPACE */
+		struct ident *as1;
+		as1 = numerical_address_space(1);
+		if (s->ctype.as == as1)
+			return 1;
+		info(s->pos, "UIO_USERSPACE but rvalue is not as(1)");
+	} else {
+		/* KERNEL */
+		/* XXX or non-1. */
+		if (s->ctype.as == NULL)
+			return 1;
+		info(s->pos, "UIO_SYSSPACE but rvalue has AS");
+	}
+	return 0;
+}
+
 static int check_assignment_types(struct symbol *target, struct expression **rp,
-	const char **typediff)
+	const char **typediff, struct expression_list *arguments)
 {
 	struct symbol *source = degenerate(*rp);
 	struct symbol *t, *s;
@@ -1452,10 +1523,10 @@ static int check_assignment_types(struct symbol *target, struct expression **rp,
 			 * we do not remove qualifiers from pointed to [C]
 			 * or mix address spaces [sparse].
 			 */
-			if (t->ctype.as != s->ctype.as) {
-				*typediff = "different address spaces";
+			if (t->ctype.as != s->ctype.as &&
+			    (*typediff = "different address spaces") &&
+			    !check_coerce_as(t, s, arguments, typediff))
 				return 0;
-			}
 			/*
 			 * If this is a function pointer assignment, it is
 			 * actually fine to assign a pointer to const data to
@@ -1476,7 +1547,7 @@ static int check_assignment_types(struct symbol *target, struct expression **rp,
 		modr = mod1 & ~MOD_REV_QUAL;
 		modl = mod2 &  MOD_REV_QUAL;
 		*typediff = type_difference(&t->ctype, &s->ctype, modl, modr);
-		if (*typediff)
+		if (*typediff && !check_coerce_as(t, s, arguments, typediff))
 			return 0;
 		return 1;
 	}
@@ -1500,20 +1571,20 @@ Cast:
 }
 
 static int compatible_assignment_types(struct expression *expr, struct symbol *target,
-	struct expression **rp, const char *where)
+	struct expression **rp, const char *where,
+	struct expression_list *arguments)
 {
 	const char *typediff;
 
-	if (!check_assignment_types(target, rp, &typediff)) {
-		struct symbol *source = *rp ? (*rp)->ctype : NULL;
-		warning(expr->pos, "incorrect type in %s (%s)", where, typediff);
-		info(expr->pos, "   expected %s", show_typename(target));
-		info(expr->pos, "   got %s", show_typename(source));
-		*rp = cast_to(*rp, target);
-		return 0;
-	}
+	if (check_assignment_types(target, rp, &typediff, arguments))
+		return 1;
 
-	return 1;
+	struct symbol *source = *rp ? (*rp)->ctype : NULL;
+	warning(expr->pos, "incorrect type in %s (%s)", where, typediff);
+	info(expr->pos, "   expected %s", show_typename(target));
+	info(expr->pos, "   got %s", show_typename(source));
+	*rp = cast_to(*rp, target);
+	return 0;
 }
 
 static int compatible_transparent_union(struct symbol *target,
@@ -1526,7 +1597,7 @@ static int compatible_transparent_union(struct symbol *target,
 
 	FOR_EACH_PTR(t->symbol_list, member) {
 		const char *typediff;
-		if (check_assignment_types(member, rp, &typediff))
+		if (check_assignment_types(member, rp, &typediff, NULL))
 			return 1;
 	} END_FOR_EACH_PTR(member);
 
@@ -1534,12 +1605,14 @@ static int compatible_transparent_union(struct symbol *target,
 }
 
 static int compatible_argument_type(struct expression *expr, struct symbol *target,
-	struct expression **rp, const char *where)
+	struct expression **rp, const char *where,
+	struct expression_list *arguments)
 {
 	if (compatible_transparent_union(target, rp))
 		return 1;
 
-	return compatible_assignment_types(expr, target, rp, where);
+	return compatible_assignment_types(expr, target, rp, where,
+	    arguments);
 }
 
 static void mark_addressable(struct expression *expr)
@@ -1610,7 +1683,7 @@ static struct symbol *evaluate_assignment(struct expression *expr)
 		if (!evaluate_assign_op(expr))
 			return NULL;
 	} else {
-		if (!compatible_assignment_types(expr, ltype, &expr->right, "assignment"))
+		if (!compatible_assignment_types(expr, ltype, &expr->right, "assignment", NULL))
 			return NULL;
 	}
 
@@ -1638,10 +1711,12 @@ static void examine_fn_arguments(struct symbol *fn)
 				else
 					ptr->ctype.base_type = arg;
 				combine_address_space(s->pos, &ptr->ctype.as, s->ctype.as);
+				combine_segflg_arg(s->pos, &ptr->ctype.segflg_arg, s->ctype.segflg_arg);
 				ptr->ctype.modifiers |= s->ctype.modifiers & MOD_PTRINHERIT;
 
 				s->ctype.base_type = ptr;
 				s->ctype.as = NULL;
+				s->ctype.segflg_arg = 0;
 				s->ctype.modifiers &= ~MOD_PTRINHERIT;
 				s->bit_size = 0;
 				s->examined = 0;
@@ -2368,7 +2443,8 @@ static int evaluate_arguments(struct symbol *fn, struct expression_list *head)
 			static char where[30];
 			examine_symbol_type(target);
 			sprintf(where, "argument %d", i);
-			compatible_argument_type(expr, target, p, where);
+			compatible_argument_type(expr, target, p, where,
+			    head);
 		}
 
 		i++;
@@ -2772,7 +2848,7 @@ static int handle_initializer(struct expression **ep, int nested,
 		*ep = e;
 		if (!evaluate_expression(e))
 			return 1;
-		compatible_assignment_types(e, ctype, ep, "initializer");
+		compatible_assignment_types(e, ctype, ep, "initializer", NULL);
 		/*
 		 * Initializers for static storage duration objects
 		 * shall be constant expressions or a string literal [6.7.8(4)].
@@ -3468,7 +3544,7 @@ static struct symbol *evaluate_return_expression(struct statement *stmt)
 	}
 	if (!expr->ctype)
 		return NULL;
-	compatible_assignment_types(expr, fntype, &stmt->expression, "return expression");
+	compatible_assignment_types(expr, fntype, &stmt->expression, "return expression", NULL);
 	return NULL;
 }
 

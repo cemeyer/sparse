@@ -133,6 +133,7 @@ typedef void (*validate_decl_t)(struct symbol *decl);
 extern struct token *external_declaration(struct token *, struct symbol_list **, validate_decl_t);
 
 extern struct symbol *ctype_integer(int size, int want_unsigned);
+extern struct ident *numerical_address_space(int asn);
 
 extern int inline_function(struct expression *expr, struct symbol *sym);
 extern void uninline(struct symbol *sym);

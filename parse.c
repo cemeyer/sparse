@@ -47,6 +47,7 @@
 static struct symbol_list **function_symbol_list;
 struct symbol_list *function_computed_target_list;
 struct statement_list *function_computed_goto_list;
+struct ident *segflg_arg_magic_as;
 
 static struct token *statement(struct token *token, struct statement **tree);
 static struct token *handle_attributes(struct token *token, struct decl_state *ctx, unsigned int keywords);
@@ -89,7 +90,8 @@ static attr_t
 	attribute_address_space, attribute_context,
 	attribute_designated_init,
 	attribute_transparent_union, ignore_attribute,
-	attribute_mode, attribute_force;
+	attribute_mode, attribute_force,
+	attribute_segarg;
 
 typedef struct symbol *to_mode_t(struct symbol *);
 
@@ -425,6 +427,10 @@ static struct symbol_op ignore_attr_op = {
 	.attribute = ignore_attribute,
 };
 
+static struct symbol_op segarg_op = {
+	.attribute = attribute_segarg,
+};
+
 static struct symbol_op mode_QI_op = {
 	.type = KW_MODE,
 	.to_mode = to_QI_mode
@@ -590,6 +596,8 @@ static struct init_keyword {
 	{"__const__",	NS_KEYWORD,	MOD_PURE,	.op = &attr_fun_op },
 	{"externally_visible",	NS_KEYWORD,	.op = &ext_visible_op },
 	{"__externally_visible__",	NS_KEYWORD,	.op = &ext_visible_op },
+	{ "segarg",	NS_KEYWORD,			.op = &segarg_op },
+	{ "__segarg__",	NS_KEYWORD,			.op = &segarg_op },
 
 	{ "mode",	NS_KEYWORD,	.op = &mode_op },
 	{ "__mode__",	NS_KEYWORD,	.op = &mode_op },
@@ -653,6 +661,7 @@ void init_parser(int stream)
 			sym->op = &ignore_attr_op;
 		}
 	}
+	segflg_arg_magic_as = numerical_address_space(100);
 }
 
 
@@ -1162,7 +1171,7 @@ static struct token *attribute_bitwise(struct token *token, struct symbol *attr,
 	return token;
 }
 
-static struct ident *numerical_address_space(int asn)
+struct ident *numerical_address_space(int asn)
 {
 	char buff[32];
 
@@ -1325,6 +1334,38 @@ static struct token *attribute_transparent_union(struct token *token, struct sym
 		ctx->ctype.base_type->transparent_union = 1;
 	else
 		warning(token->pos, "attribute __transparent_union__ applied to non-union type");
+	return token;
+}
+
+static struct token *attribute_segarg(struct token *token, struct symbol *attr, struct decl_state *ctx)
+{
+	struct expression *expr = NULL;
+	struct token *next;
+	unsigned segflg_arg = 0;
+
+	token = expect(token, '(', "after segarg attribute");
+	switch (token_type(token)) {
+	case TOKEN_NUMBER:
+		next = primary_expression(token, &expr);
+		if (expr->type != EXPR_VALUE || expr->value >= UINT_MAX ||
+		    expr->value == 0)
+			goto invalid;
+		segflg_arg = expr->value;
+		break;
+	default:
+		next = token->next;
+	invalid:
+		warning(token->pos, "invalid segarg attribute");
+	}
+
+	if (Waddress_space && segflg_arg > 0) {
+		if (ctx->ctype.segflg_arg > 0)
+			sparse_error(token->pos,
+				     "multiple segarg attributes given: %u & %u",
+				     ctx->ctype.segflg_arg, segflg_arg);
+		ctx->ctype.segflg_arg = segflg_arg;
+	}
+	token = expect(next, ')', "after segarg attribute");
 	return token;
 }
 
@@ -1554,6 +1595,9 @@ static void apply_ctype(struct position pos, struct ctype *thistype, struct ctyp
 	/* Address space */
 	if (thistype->as)
 		ctype->as = thistype->as;
+
+	if (thistype->segflg_arg > 0)
+		ctype->segflg_arg = thistype->segflg_arg;
 }
 
 static void specifier_conflict(struct position pos, int what, struct ident *new)
@@ -1925,10 +1969,12 @@ static struct token *pointer(struct token *token, struct decl_state *ctx)
 		ptr->ctype.modifiers = ctx->ctype.modifiers;
 		ptr->ctype.base_type = ctx->ctype.base_type;
 		ptr->ctype.as = ctx->ctype.as;
+		ptr->ctype.segflg_arg = ctx->ctype.segflg_arg;
 		ptr->ctype.contexts = ctx->ctype.contexts;
 		ctx->ctype.modifiers = 0;
 		ctx->ctype.base_type = ptr;
 		ctx->ctype.as = NULL;
+		ctx->ctype.segflg_arg = 0;
 		ctx->ctype.contexts = NULL;
 		ctx->ctype.alignment = 0;
 

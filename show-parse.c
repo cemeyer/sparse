@@ -287,6 +287,7 @@ static void do_show_type(struct symbol *sym, struct type_name *name)
 	const char *typename;
 	unsigned long mod = 0;
 	struct ident *as = NULL;
+	unsigned sa = 0;
 	int was_ptr = 0;
 	int restr = 0;
 	int fouled = 0;
@@ -299,6 +300,8 @@ deeper:
 
 		if (as)
 			prepend(name, "%s ", show_as(as));
+		if (sa != 0)
+			prepend(name, "<segarg:%u> ", sa);
 
 		if (sym && (sym->type == SYM_BASETYPE || sym->type == SYM_ENUM))
 			mod &= ~MOD_SPECIFIER;
@@ -308,6 +311,7 @@ deeper:
 		memcpy(name->start, s, len);
 		mod = 0;
 		as = NULL;
+		sa = 0;
 	}
 
 	if (!sym)
@@ -328,6 +332,7 @@ deeper:
 		prepend(name, "*");
 		mod = sym->ctype.modifiers;
 		as = sym->ctype.as;
+		sa = sym->ctype.segflg_arg;
 		was_ptr = 1;
 		examine_pointer_target(sym);
 		break;

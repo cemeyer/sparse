@@ -101,6 +101,7 @@ struct ctype {
 	struct context_list *contexts;
 	struct ident *as;
 	struct symbol *base_type;
+	unsigned segflg_arg;
 };
 
 struct decl_state {
@@ -517,6 +518,8 @@ struct symbol *befoul(struct symbol *type);
 
 
 extern struct ident bad_address_space;
+extern struct ident *segflg_arg_magic_as;
+extern const unsigned bad_segflg_arg;
 
 static inline bool valid_as(struct ident *as)
 {
@@ -535,6 +538,27 @@ static inline void combine_address_space(struct position pos,
 	else if (as != sas) {
 		*tas = &bad_address_space;
 		sparse_error(pos, "multiple address spaces given");
+	}
+}
+
+static inline bool valid_segflg_arg(unsigned sa)
+{
+	return sa != 0 && sa != bad_segflg_arg;
+}
+
+static inline void combine_segflg_arg(struct position pos, unsigned *tsa,
+    unsigned ssa)
+{
+	unsigned segarg;
+
+	if (!ssa)
+		return;
+	segarg = *tsa;
+	if (segarg == 0)
+		*tsa = ssa;
+	else if (segarg != ssa) {
+		*tsa = bad_segflg_arg;
+		sparse_error(pos, "multiple segment flag argument attributes");
 	}
 }
 
