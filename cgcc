@@ -45,8 +45,12 @@ while (@ARGV) {
     # Ignore the extension if '-x c' is given.
     if ($_ eq '-x') {
 	die ("$0: missing argument for $_") if !@ARGV;
-	die ("$0: invalid argument for $_") if $ARGV[0] ne 'c';
-	$do_check = 1;
+	if ($ARGV[0] eq 'c') {
+	    $do_check = 1;
+	} else {
+	    die ("$0: invalid argument for $_") if $ARGV[0] ne 'assembler-with-cpp';
+	    $do_check = 0;
+	}
 	$nargs = 1;
     }
 
