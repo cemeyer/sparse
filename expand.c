@@ -139,6 +139,11 @@ Int:
 	oldmask = oldsignmask | (oldsignmask-1);
 	dropped = oldmask & ~mask;
 
+#ifndef __FreeBSD__
+	/*
+	 * This is not something we care about.  Our bswap() (ntohs())
+	 * definitions trigger this.
+	 */
 	// OK if the bits were (and still are) purely sign bits
 	if (value & dropped) {
 		if (!(value & oldsignmask) || !(value & signmask) || (value & dropped) != dropped)
@@ -146,6 +151,7 @@ Int:
 				value & oldmask,
 				value & mask);
 	}
+#endif
 	return;
 
 Float:
