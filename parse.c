@@ -1898,10 +1898,25 @@ static enum kind which_func(struct token *token,
 		/* don't complain about those */
 		if (!n || match_op(next->next, ';') || match_op(next->next, ','))
 			return Empty;
+#ifndef __FreeBSD__
+		/*
+		 * Clang and GCC -Wstrict-prototypes do not complain about
+		 * accidental pre-standard variadic functions (int foo()).  In
+		 * FreeBSD users almost certainly intend a zero-argument
+		 * function (int foo(void)), and we run Sparse in
+		 * warnings-are-error mode.  To kill the sparse warning we'd
+		 * need to disable the CC warning of the same name, which we
+		 * don't want either.
+		 *
+		 * Disable this useless warning; a nicer version of this change
+		 * would give this sparse-specific warning a sparse-specific
+		 * flag.
+		 */
 		if (Wstrict_prototypes)
 			warning(next->pos,
 				"non-ANSI function declaration of function '%s'",
 				show_ident(*n));
+#endif /* !FreeBSD */
 		return Empty;
 	}
 
