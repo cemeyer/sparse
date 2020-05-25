@@ -296,7 +296,15 @@ int Wtypesign = 0;
 int Wundef = 0;
 int Wuninitialized = 1;
 int Wunknown_attribute = 0;
+#ifdef __FreeBSD__
+/*
+ * Don't enable warnings not set in CFLAGS when the warning name is identical
+ * to a compiler warning name.
+ */
+int Wvla = 0;
+#else
 int Wvla = 1;
+#endif
 
 int dump_macro_defs = 0;
 int dump_macros_only = 0;
