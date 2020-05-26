@@ -268,7 +268,15 @@ int Wdo_while = 0;
 int Wimplicit_int = 1;
 int Winit_cstring = 0;
 int Wint_to_pointer_cast = 1;
+#ifdef __FreeBSD__
+/*
+ * Don't enable warnings not set in CFLAGS when the warning name is identical
+ * to a compiler warning name.
+ */
+int Wenum_mismatch = 0;
+#else
 int Wenum_mismatch = 1;
+#endif
 int Wexternal_function_has_definition = 1;
 int Wsparse_error = 0;
 int Wmemcpy_max_count = 1;
